@@ -541,12 +541,13 @@ void Creature::LoadBotMenu(Player *pPlayer)
     if (pPlayer->GetPlayerbotAI()) return;
     uint64 guid = pPlayer->GetGUID();
     uint32 accountId = sObjectMgr.GetPlayerAccountIdByGUID(guid);
-    QueryResult *result = CharacterDatabase.PQuery("SELECT guid, name FROM characters WHERE account='%d'", accountId);
+    QueryResult *result = CharacterDatabase.PQuery("SELECT DISTINCT c.guid, c.name, c.online FROM characters c, character_social s WHERE c.account='%d' OR (c.guid=s.guid AND flags & 1 AND s.note "_LIKE_" "_CONCAT3_("'%%'","'shared'","'%%'")" AND s.friend = '%u')", accountId, guid);
     do
     {
         Field *fields = result->Fetch();
         uint64 guidlo = fields[0].GetUInt64();
         std::string name = fields[1].GetString();
+        uint8 online = fields[2].GetUInt8();
         std::string word = "";
 
         if ((guid == 0) || (guid == guidlo))
@@ -559,7 +560,8 @@ void Creature::LoadBotMenu(Player *pPlayer)
             // create the manager if it doesn't already exist
             if (!pPlayer->GetPlayerbotMgr())
                 pPlayer->SetPlayerbotMgr(new PlayerbotMgr(pPlayer));
-            if (pPlayer->GetPlayerbotMgr()->GetPlayerBot(guidlo) == NULL) // add (if not already in game)
+
+            if (pPlayer->GetPlayerbotMgr()->GetPlayerBot(guidlo) == NULL && online == 0) // add (if not already in game)
             {
                 word += "Recruit ";
                 word += name;
@@ -700,9 +702,19 @@ bool ChatHandler::HandlePlayerbotCommand(char* args)
     uint32 accountId = sObjectMgr.GetPlayerAccountIdByGUID(guid);
     if (accountId != m_session->GetAccountId())
     {
-        PSendSysMessage("|cffff0000You may only add bots from the same account.");
-        SetSentErrorMessage(true);
-        return false;
+        QueryResult *resultsocial = CharacterDatabase.PQuery("SELECT COUNT(*) FROM character_social s, characters c WHERE s.guid=c.guid AND c.online = 0 AND flags & 1 AND s.note "_LIKE_" "_CONCAT3_("'%%'","'shared'","'%%'")" AND s.friend = '%u' AND s.guid = '%u'", m_session->GetPlayer()->GetGUIDLow(), guid);
+        if (resultsocial)
+        {
+            Field *fields = resultsocial->Fetch();
+            if (fields[0].GetUInt32() == 0 && (cmdStr == "add" || cmdStr == "login"))
+            {
+                PSendSysMessage("|cffff0000You may only add bots from the same account or a friend's character that contains 'shared' in the notes on their friend list while not online.");
+                SetSentErrorMessage(true);
+                delete resultsocial;
+                return false;
+            }
+        }
+        delete resultsocial;
     }
 
     // create the playerbot manager if it doesn't already exist
